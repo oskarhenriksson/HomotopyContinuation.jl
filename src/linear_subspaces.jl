@@ -706,3 +706,81 @@ function Base.intersect(L₁::LinearSubspace, L₂::LinearSubspace)
     ext₂ = extrinsic(L₂)
     LinearSubspace([ext₁.A; ext₂.A], [ext₁.b; ext₂.b])
 end
+
+
+
+### ProductSubspaces
+
+struct ProductSubspace {T} <: AbstractSubspace{T}
+    L₁::LinearSubspace{T}
+    L₂::LinearSubspace{T}
+end
+
+function ProductSubspace(
+    A₁::AbstractMatrix{T},
+    b₁::AbstractVector{T} = zeros(eltype(A₁), size(A₁, 1)),
+    A₂::AbstractMatrix{T},
+    b₂₁::AbstractVector{T} = zeros(eltype(A₂), size(A₂, 1)),
+) where {T}
+    ProductSubspace(LinearSubspace(A₁, b₁), LinearSubspace(A₂, b₂))
+end
+
+function Base.convert(::Type{ProductSubspace{T}}, A::ProductSubspace) where {T}
+    ProductSubspace(
+        convert(::Type{LinearSubspace{T}}, A.L₁),
+        convert(::Type{LinearSubspace{T}}, A.L₂) 
+    )
+end
+
+# Base.broadcastable(A::ProductSubspace) = Ref(A)
+
+"""
+    dim(A::LinearSubspace)
+
+Dimension of the (affine) linear subspace `A`.
+"""
+dim(A::ProductSubspace) = dim(A.L₁) + dim(A.L₂)
+
+"""
+    codim(A::LinearSubspace)
+
+Codimension of the (affine) linear subspace `A`.
+"""
+codim(A::ProductSubspace) = codim(A.L₁) + codim(A.L₂)
+
+"""
+    ambient_dim(A::LinearSubspace)
+
+Dimension of ambient space of the (affine) linear subspace `A`.
+"""
+ambient_dim(A::ProductSubspace) = dim(A) + codim(A)
+
+"""
+    is_linear(L::LinearSubspace)
+
+Returns `true` if the space is proper linear subspace, i.e., described by
+`L = \\{ x | Ax = 0 \\}.
+"""
+is_linear(A::ProductSubspace) = is_linear(A.L₁) && is_linear(A.L₂)
+
+function Base.show(io::IO, A::ProductSubspace{T}) where {T}
+    println(io, "Product of LinearSubspaces:")
+    show(io, A.L₁)
+    show(io, A.L₂)    
+end
+
+function Base.copy!(A::ProductSubspace, B::ProductSubspace)
+    copy!(A.L₁, B.L₁)
+    copy!(A.L₂, B.L₂)
+    A
+end
+Base.copy(A::ProductSubspace) = ProductSubspace(A.L₁, A.L₂)
+
+function Base.:(==)(A::ProductSubspace, B::ProductSubspace)
+    A.L₁ == B.L₁ && A.L₂ == B.L₂
+end
+Base.isequal(A::ProductSubspace, B::ProductSubspace) = A === B
+
+function Base.:(*)(A::LinearSubspace, B::LinearSubspace)
+    ProductSubspace(A,B)
+end

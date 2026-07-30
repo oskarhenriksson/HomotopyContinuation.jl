@@ -20,9 +20,10 @@ struct WitnessSet{
     is_irreducible::Union{Nothing,Bool}
 end
 
+
 function WitnessSet(
     F::AbstractSystem,
-    L::LinearSubspace,
+    L::AbstractLinearSpace,
     R;
     projective::Bool = is_linear(L) && is_homogeneous(System(F)),
     is_irreducible::Union{Nothing,Bool} = nothing,
@@ -42,7 +43,8 @@ system(W::WitnessSet) = W.F
 
 Get the linear subspace stored in `W`.
 """
-linear_subspace(W::WitnessSet) = W.L
+linear_subspace(W::WitnessSet{A, LinearSubspace, B}) where {A,B} = W.L
+linear_subspace(W::WitnessSet{A, ProductSubspace, B}) where {A,B} = W.L.L₁
 
 """
     solutions(W::WitnessSet)
@@ -52,7 +54,8 @@ Get the solutions stored in `W`.
 solutions(W::WitnessSet{A,B,PathResult}) where {A,B} = solutions(W.R)
 solutions(W::WitnessSet{A,B,Vector{ComplexF64}}) where {A,B} = W.R
 
-points(W::WitnessSet) = solutions(W)
+points(W::WitnessSet{A, LinearSubspace, B}) where {A,B} = solutions(W)
+points(W::WitnessSet{A, ProductSubspace, B}) where {A,B} = first.(solutions(W), ambient_dim(linear_subspace(W)))
 
 """
     results(W::WitnessSet)
@@ -66,21 +69,21 @@ results(W::WitnessSet{<:Any,<:Any,PathResult}) = W.R
 
 Returns the degree of the witness set `W`. This equals the number of solutions stored.
 """
-ModelKit.degree(W::WitnessSet) = length(W.R)
+ModelKit.degree(W::WitnessSet) = length(points(W))
 
 """
     dim(W::WitnessSet)
 
 The dimension of the algebraic set encoded by the witness set.
 """
-dim(W::WitnessSet) = codim(W.L)
+dim(W::WitnessSet) = codim(linear_subspace(W))
 
 """
     codim(W::WitnessSet)
 
 The dimension of the algebraic set encoded by the witness set.
 """
-codim(W::WitnessSet) = dim(W.L)
+codim(W::WitnessSet) = dim(linear_subspace(W))
 
 function Base.show(io::IO, W::WitnessSet)
     print(io, "Witness set for dimension $(dim(W)) of degree $(degree(W))")
@@ -217,6 +220,11 @@ end
 
 
 ### Move witness sets around
+function witness_set(W::WitnessSet{A,ProductSubspace,B}, L::LinearSubspace; options...) where {A,B}
+    witness_set(W, L * W.L.L₂; options...)
+end
+
+
 function witness_set(W::WitnessSet, L::LinearSubspace; options...)
     if W.projective && !is_linear(L)
         error(
@@ -232,6 +240,21 @@ function witness_set(W::WitnessSet, L::LinearSubspace; options...)
         projective = is_linear(L) && W.projective,
     )
 end
+
+function on_affine_chart(W::WitnessSet)
+    if !W.projective
+        error("Witness set is not projective.")
+    end
+    F = on_affine_chart(W.F)
+    WitnessSet(
+        F,
+        W.L,
+        map(s -> set_solution!(s, F, s), solutions(W))
+    )
+end
+
+
+        
 
 ### Membership
 Base.@kwdef mutable struct MembershipProgress
@@ -580,31 +603,27 @@ APA
 
 """
 function trace_test(W₀::WitnessSet; options...)
-    L₀ = linear_subspace(W₀)
-    F = system(W₀)
-    S₀ = solutions(W₀)
     # if we are in the projective setting, we need to make sure that
     # all solutions are on the same affine chart
     # Therefore make the affine chart now
-    if W₀.projective
-        F = on_affine_chart(F)
-        s₀ = sum(s -> set_solution!(s, F, s), S₀)
+    if  W₀.projective
+        s₀ = sum(points(on_affine_chart(W₀)))
     else
-        s₀ = sum(S₀)
+        s₀ = sum(points(W))
     end
 
-    v = randn(ComplexF64, codim(L₀))
+    v = randn(ComplexF64, dim(W₀))
     L₁ = translate(L₀, v)
     L₋₁ = translate(L₀, -v)
 
-    R₁ = solve(F, S₀; start_subspace = L₀, target_subspace = L₁, options...)
-    nsolutions(R₁) == degree(W₀) || return nothing
+    W₁ = witness_set(W₀, L₁; options...)
+    degree(W₁) == degree(W₀) || return nothing
 
-    R₋₁ = solve(F, S₀; start_subspace = L₀, target_subspace = L₋₁, options...)
-    nsolutions(R₋₁) == degree(W₀) || return nothing
+    W₋₁ = witness_set(W₀, L₋₁; options...)
+    degree(W₋₁) == degree(W₀) || return nothing
 
-    s₁ = sum(solutions(R₁))
-    s₋₁ = sum(solutions(R₋₁))
+    s₁ = sum(points(W₁))
+    s₋₁ = sum(points(W₋₁))
 
     M = [s₋₁ s₀ s₁; 1 1 1]
     singvals = LA.svdvals(M)
