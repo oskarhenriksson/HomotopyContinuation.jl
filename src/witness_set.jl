@@ -5,6 +5,11 @@ export WitnessSet,
     WitnessSet(F, L, S)
 
 Store solutions `S` of the polynomial system `F(x) = L(x) = 0` into a witness set.
+
+The subspace `L` may be an ordinary [`LinearSubspace`](@ref) — an ordinary witness set — or a
+[`ProductSubspace`](@ref), in which case `W` is a *pseudo-witness set* for the image of the
+variety under the coordinate projection encoded by the product subspace's embedding. See
+[`pseudo_witness_set`](@ref).
 """
 struct WitnessSet{
     S<:AbstractSystem,
@@ -23,7 +28,7 @@ end
 
 function WitnessSet(
     F::AbstractSystem,
-    L::AbstractLinearSpace,
+    L::AbstractSubspace,
     R;
     projective::Bool = is_linear(L) && is_homogeneous(System(F)),
     is_irreducible::Union{Nothing,Bool} = nothing,
@@ -43,19 +48,24 @@ system(W::WitnessSet) = W.F
 
 Get the linear subspace stored in `W`.
 """
-linear_subspace(W::WitnessSet{A, LinearSubspace, B}) where {A,B} = W.L
-linear_subspace(W::WitnessSet{A, ProductSubspace, B}) where {A,B} = W.L.L₁
+linear_subspace(W::WitnessSet{A, <:LinearSubspace, B}) where {A,B} = W.L
+linear_subspace(W::WitnessSet{A, <:ProductSubspace, B}) where {A,B} = W.L.L₁
 
 """
     solutions(W::WitnessSet)
 
 Get the solutions stored in `W`.
 """
-solutions(W::WitnessSet{A,B,PathResult}) where {A,B} = solutions(W.R)
-solutions(W::WitnessSet{A,B,Vector{ComplexF64}}) where {A,B} = W.R
+solutions(W::WitnessSet) = _witness_solutions(W.R)
+_witness_solutions(R::Vector{<:PathResult}) = solutions(R)
+_witness_solutions(R::Vector{Vector{ComplexF64}}) = R
 
-points(W::WitnessSet{A, LinearSubspace, B}) where {A,B} = solutions(W)
-points(W::WitnessSet{A, ProductSubspace, B}) where {A,B} = first.(solutions(W), ambient_dim(linear_subspace(W)))
+# The witness points of an ordinary witness set are the stored solutions.
+points(W::WitnessSet{<:Any,<:LinearSubspace,<:Any}) = solutions(W)
+# For a product subspace `W` is a pseudo-witness set: the witness points are the images of
+# the stored preimages under the projection, i.e. their `vars₁` (image) coordinates.
+points(W::WitnessSet{<:Any,<:ProductSubspace,<:Any}) =
+    map(s -> s[W.L.vars₁], solutions(W))
 
 """
     results(W::WitnessSet)
@@ -220,7 +230,7 @@ end
 
 
 ### Move witness sets around
-function witness_set(W::WitnessSet{A,ProductSubspace,B}, L::LinearSubspace; options...) where {A,B}
+function witness_set(W::WitnessSet{A,<:ProductSubspace,B}, L::LinearSubspace; options...) where {A,B}
     witness_set(W, L * W.L.L₂; options...)
 end
 
@@ -602,28 +612,32 @@ julia> trace = trace_test(W)
 APA
 
 """
-function trace_test(W₀::WitnessSet; options...)
+function trace_test(W₀::WitnessSet{<:Any,<:LinearSubspace,<:Any}; options...)
+    L₀ = linear_subspace(W₀)
+    F = system(W₀)
+    S₀ = solutions(W₀)
     # if we are in the projective setting, we need to make sure that
     # all solutions are on the same affine chart
     # Therefore make the affine chart now
-    if  W₀.projective
-        s₀ = sum(points(on_affine_chart(W₀)))
+    if W₀.projective
+        F = on_affine_chart(F)
+        s₀ = sum(s -> set_solution!(s, F, s), S₀)
     else
-        s₀ = sum(points(W))
+        s₀ = sum(S₀)
     end
 
-    v = randn(ComplexF64, dim(W₀))
+    v = randn(ComplexF64, codim(L₀))
     L₁ = translate(L₀, v)
     L₋₁ = translate(L₀, -v)
 
-    W₁ = witness_set(W₀, L₁; options...)
-    degree(W₁) == degree(W₀) || return nothing
+    R₁ = solve(F, S₀; start_subspace = L₀, target_subspace = L₁, options...)
+    nsolutions(R₁) == degree(W₀) || return nothing
 
-    W₋₁ = witness_set(W₀, L₋₁; options...)
-    degree(W₋₁) == degree(W₀) || return nothing
+    R₋₁ = solve(F, S₀; start_subspace = L₀, target_subspace = L₋₁, options...)
+    nsolutions(R₋₁) == degree(W₀) || return nothing
 
-    s₁ = sum(points(W₁))
-    s₋₁ = sum(points(W₋₁))
+    s₁ = sum(solutions(R₁))
+    s₋₁ = sum(solutions(R₋₁))
 
     M = [s₋₁ s₀ s₁; 1 1 1]
     singvals = LA.svdvals(M)

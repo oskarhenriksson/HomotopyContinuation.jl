@@ -1,4 +1,5 @@
 export LinearSubspace,
+    ProductSubspace,
     ExtrinsicDescription,
     IntrinsicDescription,
     Coordinates,
@@ -711,62 +712,121 @@ end
 
 ### ProductSubspaces
 
-struct ProductSubspace {T} <: AbstractSubspace{T}
+"""
+    ProductSubspace(L₁, L₂, vars₁, vars₂)
+
+A product `L₁ × L₂` of two (affine) linear subspaces together with an *embedding* into a
+common ambient space: `vars₁` lists the ambient coordinates that `L₁` acts on and `vars₂`
+those that `L₂` acts on. Together `vars₁` and `vars₂` partition the ambient coordinates.
+
+For pseudo-witness sets `L₁` is the slice in the **image** (the projected/kept coordinates
+`vars₁`) and `L₂` is the slice in the **fibre** (`vars₂`). The embedding is what lets a
+witness set report the projection: the image of a solution `x` is `x[vars₁]`.
+"""
+struct ProductSubspace{T} <: AbstractSubspace{T}
     L₁::LinearSubspace{T}
     L₂::LinearSubspace{T}
+    # ambient coordinates each factor acts on (the embedding into the full space)
+    vars₁::Vector{Int}
+    vars₂::Vector{Int}
+end
+
+# default embedding: L₁ on the first block of coordinates, L₂ on the following block
+function ProductSubspace(L₁::LinearSubspace, L₂::LinearSubspace)
+    n₁ = ambient_dim(L₁)
+    n₂ = ambient_dim(L₂)
+    ProductSubspace(L₁, L₂, collect(1:n₁), collect(n₁+1:n₁+n₂))
+end
+
+# explicit embedding
+function ProductSubspace(
+    L₁::LinearSubspace,
+    L₂::LinearSubspace,
+    vars₁::AbstractVector{<:Integer},
+    vars₂::AbstractVector{<:Integer},
+)
+    length(vars₁) == ambient_dim(L₁) ||
+        throw(ArgumentError("`vars₁` must have one entry per ambient coordinate of `L₁`."))
+    length(vars₂) == ambient_dim(L₂) ||
+        throw(ArgumentError("`vars₂` must have one entry per ambient coordinate of `L₂`."))
+    ProductSubspace(L₁, L₂, collect(Int, vars₁), collect(Int, vars₂))
 end
 
 function ProductSubspace(
     A₁::AbstractMatrix{T},
+    A₂::AbstractMatrix{T};
     b₁::AbstractVector{T} = zeros(eltype(A₁), size(A₁, 1)),
-    A₂::AbstractMatrix{T},
-    b₂₁::AbstractVector{T} = zeros(eltype(A₂), size(A₂, 1)),
+    b₂::AbstractVector{T} = zeros(eltype(A₂), size(A₂, 1)),
 ) where {T}
     ProductSubspace(LinearSubspace(A₁, b₁), LinearSubspace(A₂, b₂))
 end
 
 function Base.convert(::Type{ProductSubspace{T}}, A::ProductSubspace) where {T}
     ProductSubspace(
-        convert(::Type{LinearSubspace{T}}, A.L₁),
-        convert(::Type{LinearSubspace{T}}, A.L₂) 
+        convert(LinearSubspace{T}, A.L₁),
+        convert(LinearSubspace{T}, A.L₂),
+        A.vars₁,
+        A.vars₂,
     )
+end
+
+"""
+    LinearSubspace(P::ProductSubspace)
+
+Flatten the product subspace `P = L₁ × L₂` into a single [`LinearSubspace`](@ref) of the
+full ambient space, embedding the extrinsic equations of `L₁` on the coordinates `vars₁`
+and those of `L₂` on `vars₂`. This lets a product subspace be solved / tracked with the
+ordinary linear-subspace machinery.
+"""
+function LinearSubspace(P::ProductSubspace{T}) where {T}
+    E₁ = extrinsic(P.L₁)
+    E₂ = extrinsic(P.L₂)
+    c₁ = size(E₁.A, 1)
+    c₂ = size(E₂.A, 1)
+    n = length(P.vars₁) + length(P.vars₂)
+    A = zeros(T, c₁ + c₂, n)
+    A[1:c₁, P.vars₁] .= E₁.A
+    A[c₁+1:c₁+c₂, P.vars₂] .= E₂.A
+    b = vcat(E₁.b, E₂.b)
+    LinearSubspace(A, b)
 end
 
 # Base.broadcastable(A::ProductSubspace) = Ref(A)
 
 """
-    dim(A::LinearSubspace)
+    dim(A::ProductSubspace)
 
-Dimension of the (affine) linear subspace `A`.
+Dimension of the product subspace `A`.
 """
 dim(A::ProductSubspace) = dim(A.L₁) + dim(A.L₂)
 
 """
-    codim(A::LinearSubspace)
+    codim(A::ProductSubspace)
 
-Codimension of the (affine) linear subspace `A`.
+Codimension of the product subspace `A`.
 """
 codim(A::ProductSubspace) = codim(A.L₁) + codim(A.L₂)
 
 """
-    ambient_dim(A::LinearSubspace)
+    ambient_dim(A::ProductSubspace)
 
-Dimension of ambient space of the (affine) linear subspace `A`.
+Dimension of ambient space of the product subspace `A`.
 """
 ambient_dim(A::ProductSubspace) = dim(A) + codim(A)
 
 """
-    is_linear(L::LinearSubspace)
+    is_linear(L::ProductSubspace)
 
-Returns `true` if the space is proper linear subspace, i.e., described by
-`L = \\{ x | Ax = 0 \\}.
+Returns `true` if the product subspace is a proper linear subspace, i.e., each factor
+is described by `Lᵢ = \\{ x | Aᵢ x = 0 \\}`.
 """
 is_linear(A::ProductSubspace) = is_linear(A.L₁) && is_linear(A.L₂)
 
 function Base.show(io::IO, A::ProductSubspace{T}) where {T}
-    println(io, "Product of LinearSubspaces:")
+    println(io, "Product of two linear subspaces on coordinates $(A.vars₁) × $(A.vars₂):")
     show(io, A.L₁)
-    show(io, A.L₂)    
+    println(io)
+    show(io, A.L₂)
 end
 
 function Base.copy!(A::ProductSubspace, B::ProductSubspace)
@@ -774,10 +834,11 @@ function Base.copy!(A::ProductSubspace, B::ProductSubspace)
     copy!(A.L₂, B.L₂)
     A
 end
-Base.copy(A::ProductSubspace) = ProductSubspace(A.L₁, A.L₂)
+Base.copy(A::ProductSubspace) =
+    ProductSubspace(copy(A.L₁), copy(A.L₂), copy(A.vars₁), copy(A.vars₂))
 
 function Base.:(==)(A::ProductSubspace, B::ProductSubspace)
-    A.L₁ == B.L₁ && A.L₂ == B.L₂
+    A.L₁ == B.L₁ && A.L₂ == B.L₂ && A.vars₁ == B.vars₁ && A.vars₂ == B.vars₂
 end
 Base.isequal(A::ProductSubspace, B::ProductSubspace) = A === B
 
