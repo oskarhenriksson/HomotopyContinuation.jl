@@ -713,22 +713,22 @@ end
 ### ProductSubspaces
 
 """
-    ProductSubspace(L₁, L₂, vars₁, vars₂)
+    ProductSubspace(L₁, L₂, coords₁, coords₂)
 
 A product `L₁ × L₂` of two (affine) linear subspaces together with an *embedding* into a
-common ambient space: `vars₁` lists the ambient coordinates that `L₁` acts on and `vars₂`
-those that `L₂` acts on. Together `vars₁` and `vars₂` partition the ambient coordinates.
+common ambient space: `coords₁` lists the ambient coordinates that `L₁` acts on and `coords₂`
+those that `L₂` acts on. Together `coords₁` and `coords₂` partition the ambient coordinates.
 
 For pseudo-witness sets `L₁` is the slice in the **image** (the projected/kept coordinates
-`vars₁`) and `L₂` is the slice in the **fibre** (`vars₂`). The embedding is what lets a
-witness set report the projection: the image of a solution `x` is `x[vars₁]`.
+`coords₁`) and `L₂` is the slice in the **fibre** (`coords₂`). The embedding is what lets a
+witness set report the projection: the image of a solution `x` is `x[coords₁]`.
 """
 struct ProductSubspace{T} <: AbstractSubspace{T}
     L₁::LinearSubspace{T}
     L₂::LinearSubspace{T}
     # ambient coordinates each factor acts on (the embedding into the full space)
-    vars₁::Vector{Int}
-    vars₂::Vector{Int}
+    coords₁::Vector{Int}
+    coords₂::Vector{Int}
 end
 
 # default embedding: L₁ on the first block of coordinates, L₂ on the following block
@@ -742,14 +742,14 @@ end
 function ProductSubspace(
     L₁::LinearSubspace,
     L₂::LinearSubspace,
-    vars₁::AbstractVector{<:Integer},
-    vars₂::AbstractVector{<:Integer},
+    coords₁::AbstractVector{<:Integer},
+    coords₂::AbstractVector{<:Integer},
 )
-    length(vars₁) == ambient_dim(L₁) ||
-        throw(ArgumentError("`vars₁` must have one entry per ambient coordinate of `L₁`."))
-    length(vars₂) == ambient_dim(L₂) ||
-        throw(ArgumentError("`vars₂` must have one entry per ambient coordinate of `L₂`."))
-    ProductSubspace(L₁, L₂, collect(Int, vars₁), collect(Int, vars₂))
+    length(coords₁) == ambient_dim(L₁) ||
+        throw(ArgumentError("`coords₁` must have one entry per ambient coordinate of `L₁`."))
+    length(coords₂) == ambient_dim(L₂) ||
+        throw(ArgumentError("`coords₂` must have one entry per ambient coordinate of `L₂`."))
+    ProductSubspace(L₁, L₂, collect(Int, coords₁), collect(Int, coords₂))
 end
 
 function ProductSubspace(
@@ -765,8 +765,8 @@ function Base.convert(::Type{ProductSubspace{T}}, A::ProductSubspace) where {T}
     ProductSubspace(
         convert(LinearSubspace{T}, A.L₁),
         convert(LinearSubspace{T}, A.L₂),
-        A.vars₁,
-        A.vars₂,
+        A.coords₁,
+        A.coords₂,
     )
 end
 
@@ -774,8 +774,8 @@ end
     LinearSubspace(P::ProductSubspace)
 
 Flatten the product subspace `P = L₁ × L₂` into a single [`LinearSubspace`](@ref) of the
-full ambient space, embedding the extrinsic equations of `L₁` on the coordinates `vars₁`
-and those of `L₂` on `vars₂`. This lets a product subspace be solved / tracked with the
+full ambient space, embedding the extrinsic equations of `L₁` on the coordinates `coords₁`
+and those of `L₂` on `coords₂`. This lets a product subspace be solved / tracked with the
 ordinary linear-subspace machinery.
 """
 function LinearSubspace(P::ProductSubspace{T}) where {T}
@@ -783,13 +783,14 @@ function LinearSubspace(P::ProductSubspace{T}) where {T}
     E₂ = extrinsic(P.L₂)
     c₁ = size(E₁.A, 1)
     c₂ = size(E₂.A, 1)
-    n = length(P.vars₁) + length(P.vars₂)
+    n = length(P.coords₁) + length(P.coords₂)
     A = zeros(T, c₁ + c₂, n)
-    A[1:c₁, P.vars₁] .= E₁.A
-    A[c₁+1:c₁+c₂, P.vars₂] .= E₂.A
+    A[1:c₁, P.coords₁] .= E₁.A
+    A[c₁+1:c₁+c₂, P.coords₂] .= E₂.A
     b = vcat(E₁.b, E₂.b)
     LinearSubspace(A, b)
 end
+LinearSubspace(L::LinearSubspace) = L
 
 # Base.broadcastable(A::ProductSubspace) = Ref(A)
 
@@ -834,13 +835,13 @@ function translate(L::ProductSubspace, δb, coords::Coordinates{:Extrinsic} = Ex
     ProductSubspace(
         translate(L.L₁, δb[1:c₁], coords),
         translate(L.L₂, δb[c₁+1:end], coords),
-        L.vars₁,
-        L.vars₂,
+        L.coords₁,
+        L.coords₂,
     )
 end
 
 function Base.show(io::IO, A::ProductSubspace{T}) where {T}
-    println(io, "Product of two linear subspaces on coordinates $(A.vars₁) × $(A.vars₂):")
+    println(io, "Product of two linear subspaces on coordinates $(A.coords₁) × $(A.coords₂):")
     show(io, A.L₁)
     println(io)
     show(io, A.L₂)
@@ -852,10 +853,10 @@ function Base.copy!(A::ProductSubspace, B::ProductSubspace)
     A
 end
 Base.copy(A::ProductSubspace) =
-    ProductSubspace(copy(A.L₁), copy(A.L₂), copy(A.vars₁), copy(A.vars₂))
+    ProductSubspace(copy(A.L₁), copy(A.L₂), copy(A.coords₁), copy(A.coords₂))
 
 function Base.:(==)(A::ProductSubspace, B::ProductSubspace)
-    A.L₁ == B.L₁ && A.L₂ == B.L₂ && A.vars₁ == B.vars₁ && A.vars₂ == B.vars₂
+    A.L₁ == B.L₁ && A.L₂ == B.L₂ && A.coords₁ == B.coords₁ && A.coords₂ == B.coords₂
 end
 Base.isequal(A::ProductSubspace, B::ProductSubspace) = A === B
 

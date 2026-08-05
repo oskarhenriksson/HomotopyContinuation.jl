@@ -1,5 +1,5 @@
 export WitnessSet,
-    witness_set, linear_subspace, system, dim, codim, trace_test, is_irreducible, membership
+    witness_set, linear_subspace, system, dim, codim, points, trace_test, is_irreducible, membership
 
 """
     WitnessSet(F, L, S)
@@ -63,9 +63,9 @@ _witness_solutions(R::Vector{Vector{ComplexF64}}) = R
 # The witness points of an ordinary witness set are the stored solutions.
 points(W::WitnessSet{<:Any,<:LinearSubspace,<:Any}) = solutions(W)
 # For a product subspace `W` is a pseudo-witness set: the witness points are the images of
-# the stored preimages under the projection, i.e. their `vars₁` (image) coordinates.
+# the stored preimages under the projection, i.e. their `coords₁` (image) coordinates.
 points(W::WitnessSet{<:Any,<:ProductSubspace,<:Any}) =
-    map(s -> s[W.L.vars₁], solutions(W))
+    map(s -> s[W.L.coords₁], solutions(W))
 
 """
     results(W::WitnessSet)
@@ -230,14 +230,15 @@ end
 
 
 ### Move witness sets around
-function witness_set(W::WitnessSet, L::LinearSubspace; options...)
+# `L` may be a `LinearSubspace` or a `ProductSubspace`; the slices are flattened for tracking.
+function witness_set(W::WitnessSet, L::Union{LinearSubspace,ProductSubspace}; options...)
     if W.projective && !is_linear(L)
         error(
             "The given space is an affine linear subspace (``b ≠ 0``). " *
             " Expected a linear subspace since the given witness set is projective.",
         )
     end
-    res = solve(W.F, W.R; start_subspace = W.L, target_subspace = L, options...)
+    res = solve(W.F, W.R; start_subspace = LinearSubspace(W.L), target_subspace = LinearSubspace(L), options...)
     WitnessSet(
         W.F,
         L,
