@@ -230,11 +230,6 @@ end
 
 
 ### Move witness sets around
-function witness_set(W::WitnessSet{A,<:ProductSubspace,B}, L::LinearSubspace; options...) where {A,B}
-    witness_set(W, L * W.L.L₂; options...)
-end
-
-
 function witness_set(W::WitnessSet, L::LinearSubspace; options...)
     if W.projective && !is_linear(L)
         error(
@@ -612,36 +607,34 @@ julia> trace = trace_test(W)
 APA
 
 """
-function trace_test(W₀::WitnessSet{<:Any,<:LinearSubspace,<:Any}; options...)
-    L₀ = linear_subspace(W₀)
-    F = system(W₀)
-    S₀ = solutions(W₀)
-    # if we are in the projective setting, we need to make sure that
-    # all solutions are on the same affine chart
-    # Therefore make the affine chart now
-    if W₀.projective
-        F = on_affine_chart(F)
-        s₀ = sum(s -> set_solution!(s, F, s), S₀)
-    else
-        s₀ = sum(S₀)
-    end
+function trace_test(W₀::WitnessSet; options...)
+    # in the projective setting, put the system and solutions on a common affine chart first
+    W = W₀.projective ? on_affine_chart(W₀) : W₀
+    L₀ = W.L
+    s₀ = sum(points(W))
 
     v = randn(ComplexF64, codim(L₀))
-    L₁ = translate(L₀, v)
-    L₋₁ = translate(L₀, -v)
+    W₁ = witness_set(W, translate(L₀, v); options...)
+    degree(W₁) == degree(W) || return nothing
+    W₋₁ = witness_set(W, translate(L₀, -v); options...)
+    degree(W₋₁) == degree(W) || return nothing
 
-    R₁ = solve(F, S₀; start_subspace = L₀, target_subspace = L₁, options...)
-    nsolutions(R₁) == degree(W₀) || return nothing
+    s₁ = sum(points(W₁))
+    s₋₁ = sum(points(W₋₁))
 
-    R₋₁ = solve(F, S₀; start_subspace = L₀, target_subspace = L₋₁, options...)
-    nsolutions(R₋₁) == degree(W₀) || return nothing
+    _trace_test_value(s₋₁, s₀, s₁)
+end
 
-    s₁ = sum(solutions(R₁))
-    s₋₁ = sum(solutions(R₋₁))
-
-    M = [s₋₁ s₀ s₁; 1 1 1]
-    singvals = LA.svdvals(M)
-    trace = singvals[3] / singvals[1]
-
-    trace
+# Trace value comparing the point sums `s₋₁, s₀, s₁`: complete ⟺ they are collinear, detected
+# as rank-deficiency of `[s₋₁ s₀ s₁; 1 1 1]` via its smallest singular value. That test needs
+# points of length ≥ 2; for scalar points (e.g. a witness set with a 1-dimensional image, or a
+# one-variable system) it is degenerate, so we use the equivalent symmetric second difference.
+function _trace_test_value(s₋₁, s₀, s₁)
+    if length(s₀) ≥ 2
+        M = [s₋₁ s₀ s₁; 1 1 1]
+        singvals = LA.svdvals(M)
+        singvals[3] / singvals[1]
+    else
+        LA.norm(s₋₁ - 2 .* s₀ + s₁) / (LA.norm(s₋₁) + LA.norm(s₀) + LA.norm(s₁) + eps())
+    end
 end

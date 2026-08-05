@@ -261,38 +261,23 @@ pseudo_witness_set(F::Vector{Expression}, image_vars; kwargs...) =
     pseudo_witness_set(System(F), image_vars; kwargs...)
 
 """
-    trace_test(W::WitnessSet{<:Any,<:ProductSubspace,<:Any}; options...)
+    witness_set(W::WitnessSet{<:Any,<:ProductSubspace,<:Any}, L::ProductSubspace; options...)
 
-Trace test for a pseudo-witness set: translate only the image slice `L₁` (keeping the fibre
-slice `L₂` fixed), track the stored preimages, and check that the **image** points move
-linearly. Returns a value that is ≈ 0 iff the pseudo-witness set is complete (all image
-witness points are present), or `nothing` if a move loses points.
+Move the pseudo-witness set `W` to the product slice `L` by tracking its stored preimages
+from `W`'s slice to `L`.
 """
-function trace_test(W₀::WitnessSet{<:Any,<:ProductSubspace,<:Any}; options...)
-    W₀.projective &&
-        error("`trace_test` for pseudo-witness sets currently supports only affine systems.")
-    P = W₀.L
-    F = system(W₀)
-    S₀ = solutions(W₀)
-    L₀ = LinearSubspace(P)
-    image(s) = s[P.vars₁]
-    s₀ = sum(points(W₀))
-
-    # translate the image slice L₁ only, keeping the fibre slice L₂ fixed
-    v = randn(ComplexF64, codim(P.L₁))
-    L₁ = LinearSubspace(ProductSubspace(translate(P.L₁, v), P.L₂, P.vars₁, P.vars₂))
-    L₋₁ = LinearSubspace(ProductSubspace(translate(P.L₁, -v), P.L₂, P.vars₁, P.vars₂))
-
-    R₁ = solve(F, S₀; start_subspace = L₀, target_subspace = L₁, options...)
-    nsolutions(R₁) == degree(W₀) || return nothing
-    R₋₁ = solve(F, S₀; start_subspace = L₀, target_subspace = L₋₁, options...)
-    nsolutions(R₋₁) == degree(W₀) || return nothing
-
-    s₁ = sum(image, solutions(R₁))
-    s₋₁ = sum(image, solutions(R₋₁))
-
-    # The sum of the image points is affine-linear in the slice translation iff the
-    # pseudo-witness set is complete, so the symmetric second difference vanishes. This form
-    # stays valid when the image is 1-dimensional (scalar image points).
-    LA.norm(s₋₁ - 2 .* s₀ + s₁) / (LA.norm(s₋₁) + LA.norm(s₀) + LA.norm(s₁) + eps())
+function witness_set(
+    W::WitnessSet{<:Any,<:ProductSubspace,<:Any},
+    L::ProductSubspace;
+    options...,
+)
+    res = solve(
+        system(W),
+        solutions(W);
+        start_subspace = LinearSubspace(W.L),
+        target_subspace = LinearSubspace(L),
+        options...,
+    )
+    WitnessSet(system(W), L, results(res; only_nonsingular = true); projective = false)
 end
+

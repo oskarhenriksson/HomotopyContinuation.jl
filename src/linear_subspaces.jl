@@ -822,6 +822,23 @@ is described by `Lᵢ = \\{ x | Aᵢ x = 0 \\}`.
 """
 is_linear(A::ProductSubspace) = is_linear(A.L₁) && is_linear(A.L₂)
 
+"""
+    translate(L::ProductSubspace, δb, ::Coordinates = Extrinsic)
+
+Translate the product subspace `L = L₁ × L₂` by `δb`. Compatible with
+[`translate`](@ref)`(::LinearSubspace, …)`: `δb` has length `codim(L)`, its first
+`codim(L₁)` entries translating `L₁` and the remaining `codim(L₂)` translating `L₂`.
+"""
+function translate(L::ProductSubspace, δb, coords::Coordinates{:Extrinsic} = Extrinsic)
+    c₁ = codim(L.L₁)
+    ProductSubspace(
+        translate(L.L₁, δb[1:c₁], coords),
+        translate(L.L₂, δb[c₁+1:end], coords),
+        L.vars₁,
+        L.vars₂,
+    )
+end
+
 function Base.show(io::IO, A::ProductSubspace{T}) where {T}
     println(io, "Product of two linear subspaces on coordinates $(A.vars₁) × $(A.vars₂):")
     show(io, A.L₁)
