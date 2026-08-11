@@ -32,7 +32,9 @@ operation on it (moving the image slice, trace tests) tracks — as few solution
   `L₂` gets codimension `d - e`.
 * `certify = true`: run the [`trace_test`](@ref) on the result and warn if it does not pass.
 
-Currently only affine (non-homogeneous) systems and coordinate projections are supported.
+A homogeneous `F` is handled as its affine cone: `dim` and `dim_image` are then projective
+dimensions, the stored points are cone representatives of the projective witness points, and
+`degree` is the degree of the projective image. Only coordinate projections are supported.
 
 ### Example
 ```julia-repl
@@ -54,20 +56,22 @@ function pseudo_witness_set(
     options...,
 )
     n = size(F, 2)
-    is_homogeneous(System(F)) && error(
-        "`pseudo_witness_set` currently supports only affine (non-homogeneous) systems.",
-    )
+    projective = is_homogeneous(System(F))
     all(v -> 1 ≤ v ≤ n, image_coords) ||
         throw(ArgumentError("`image_coords` must be a subset of 1:$n."))
 
-    d = isnothing(dim) ? corank(F) : dim
-    e = dim_image
+    # a homogeneous system is handled as its affine cone: the given projective dimensions are
+    # shifted by one and everything below stays affine (`corank` already returns the cone dim)
+    d = isnothing(dim) ? corank(F) : dim + projective
+    e = dim_image + projective
     0 ≤ e ≤ d ||
         throw(ArgumentError("`dim_image` must satisfy 0 ≤ dim_image ≤ dim (= $d)."))
 
     image_coords = collect(Int, image_coords)
     fibre_coords = setdiff(1:n, image_coords)
 
+    # fix the fibre slice L₂ (baked into F′ = X ∩ L₂), leaving only the image slice to move.
+    # With no fibre to cut (d == e) the slice is the whole fibre space (no equations).
     # fix the fibre slice L₂ (baked into F′ = X ∩ L₂), leaving only the image slice to move.
     # With no fibre to cut (d == e) the slice is the whole fibre space (no equations).
     m₂ = length(fibre_coords)
