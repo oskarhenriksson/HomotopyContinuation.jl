@@ -381,7 +381,8 @@ function is_contained(
     tracker_options = cache.tracker_options
     endgame_options = cache.endgame_options
     projective = Y.projective
-    LY = linear_subspace(Y)
+    # `Y.L` may be a `LinearSubspace` (identity) or a `ProductSubspace` (flattened for tracking)
+    LY = LinearSubspace(Y.L)
     Hom = linear_subspace_homotopy(F, LY, LY)
     tracker =
         EndgameTracker(Hom; tracker_options = tracker_options, options = endgame_options)
@@ -416,6 +417,8 @@ function serial_x_in_Y(
     cY = codim(linear_subspace(Y))
     A = view(cache.A, 1:cY, :)
     b = view(cache.b, 1:cY)
+    # for a pseudo-witness set only the image coordinates are compared with the query
+    cols = Y.L isa ProductSubspace ? Y.L.coords₁ : Colon()
 
     # Pre-allocate output
     out = Vector{Bool}(undef, l_X)
@@ -425,15 +428,32 @@ function serial_x_in_Y(
         idx += 1
         update_progress_tasks!(progress, idx, l_X)
 
-        # first check
-        evaluate!(y0, F, norm(x, Inf) .* x0)
-        evaluate!(y, F, x)
-        if norm(y, Inf) > 1e-2 * norm(y0, Inf)
-            return false
+        # first check: a cheap rejection, only possible when the query is a full-space point
+        # (for a pseudo-witness set the query is an image point, so `F` cannot be evaluated)
+        if !(Y.L isa ProductSubspace)
+            evaluate!(y0, F, norm(x, Inf) .* x0)
+            evaluate!(y, F, x)
+            if norm(y, Inf) > 1e-2 * norm(y0, Inf)
+                return false
+            end
         end
 
         # second check
-        if projective isa Val{true}
+        if Y.L isa ProductSubspace
+            # pseudo-witness set: the query is an image point — slice the image through it
+            # (the directions in `A` restricted to the image coordinates) and keep the
+            # fibre slice L₂ fixed
+            A₁ = view(A, :, Y.L.coords₁)
+            LA.mul!(b, A₁, x)
+            L = LinearSubspace(
+                ProductSubspace(
+                    LinearSubspace(Matrix(A₁), Vector(b)),
+                    Y.L.L₂,
+                    Y.L.coords₁,
+                    Y.L.coords₂,
+                ),
+            )
+        elseif projective isa Val{true}
             L = rand_subspace!(A, b, x; affine = false)
         else
             LA.mul!(b, A, x)
@@ -451,11 +471,11 @@ function serial_x_in_Y(
 
         rad = max(atol, norm(x_target, Inf) * rtol)
 
-        # add the points in Y to U after we have moved them towards L 
-        for p in points(Y)
+        # add the points in Y to U after we have moved them towards L
+        for p in solutions(Y)
             track!(tracker, p, 1)
             q = solution(tracker)
-            d = distance(q, x_target, InfNorm())
+            d = distance(view(q, cols), x_target, InfNorm())
             if d < rad
                 return true
             end
@@ -487,6 +507,8 @@ function threaded_x_in_Y(
     cY = codim(linear_subspace(Y))
     A = view(cache.A, 1:cY, :)
     b = view(cache.b, 1:cY)
+    # for a pseudo-witness set only the image coordinates are compared with the query
+    cols = Y.L isa ProductSubspace ? Y.L.coords₁ : Colon()
 
     # Pre-allocate output
     out = Vector{Bool}(undef, l_X)
@@ -525,20 +547,38 @@ function threaded_x_in_Y(
                             update_progress_tasks!(progress, idx, l_X)
                         end
 
-                        # first check
-                        evaluate!(local_y0, local_F, norm(x, Inf) .* x0)
-                        evaluate!(local_y, local_F, x)
+                        # first check (skipped for a pseudo-witness set: the query is an
+                        # image point, so `F` cannot be evaluated at it)
+                        if !(Y.L isa ProductSubspace)
+                            evaluate!(local_y0, local_F, norm(x, Inf) .* x0)
+                            evaluate!(local_y, local_F, x)
+                        end
 
                         result = false
-                        if norm(local_y, Inf) <= 1e-2 * norm(local_y0, Inf)
+                        if Y.L isa ProductSubspace ||
+                           norm(local_y, Inf) <= 1e-2 * norm(local_y0, Inf)
                             # second check
-                            if projective isa Val{true}
+                            if Y.L isa ProductSubspace
+                                # pseudo-witness set: the query is an image point — slice
+                                # the image through it (the directions in `A` restricted to
+                                # the image coordinates) and keep the fibre slice L₂ fixed
+                                A₁ = view(local_A, :, Y.L.coords₁)
+                                LA.mul!(local_b, A₁, x)
+                                L = LinearSubspace(
+                                    ProductSubspace(
+                                        LinearSubspace(Matrix(A₁), Vector(local_b)),
+                                        Y.L.L₂,
+                                        Y.L.coords₁,
+                                        Y.L.coords₂,
+                                    ),
+                                )
+                            elseif projective isa Val{true}
                                 L = rand_subspace!(local_A, local_b, x; affine = false)
                             else
-                                LA.mul!(local_b, A, x)
+                                LA.mul!(local_b, local_A, x)
                                 L = LinearSubspace(
                                     ExtrinsicDescription(
-                                        copy(A),
+                                        copy(local_A),
                                         copy(local_b);
                                         orthonormal = true,
                                     ),
@@ -556,11 +596,11 @@ function threaded_x_in_Y(
 
                             rad = max(atol, norm(x_target, Inf) * rtol)
 
-                            # add the points in Y to U after we have moved them towards L 
-                            for p in points(Y)
+                            # add the points in Y to U after we have moved them towards L
+                            for p in solutions(Y)
                                 track!(local_tracker, p, 1)
                                 q = solution(local_tracker)
-                                if distance(q, x_target, InfNorm()) < rad
+                                if distance(view(q, cols), x_target, InfNorm()) < rad
                                     result = true
                                     break
                                 end
