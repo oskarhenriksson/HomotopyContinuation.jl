@@ -1,17 +1,21 @@
 export pseudo_witness_set
 
-# embed a LinearSubspace living on `coords` into the full `n`-dimensional space
-# (zeros on all other columns), so it constrains only those coordinates
-function _embed_subspace(L::LinearSubspace, coords, n::Integer)
-    E = extrinsic(L)
-    c = size(E.A, 1)
-    A = zeros(eltype(E.A), c, n)
-    A[:, coords] .= E.A
-    LinearSubspace(A, E.b)
+# the dimension of the image of V(F) under the coordinate projection onto `image_coords`:
+# the rank of the projection restricted to the tangent space of V(F) at a generic point
+# (the analog of `corank` for ordinary witness sets)
+function image_corank(F::AbstractSystem, image_coords)
+    sp = find_start_pair(F)
+    isnothing(sp) && error(
+        "`image_corank`: could not find a point on the variety to estimate the image dimension.",
+    )
+    u = zeros(ComplexF64, size(F, 1))
+    U = zeros(ComplexF64, size(F)...)
+    evaluate_and_jacobian!(u, U, F, sp[1])
+    LA.rank(LA.nullspace(U)[image_coords, :])
 end
 
 """
-    pseudo_witness_set(F, image_variables; dim_image, dim = nothing, options...)
+    pseudo_witness_set(F, image_variables; dim_image = nothing, dim = nothing, options...)
 
 Compute a pseudo-witness set for the image of the variety `V(F)` under the coordinate
 projection onto `image_variables` — a subset of the variables of `F` (their coordinate
@@ -22,14 +26,22 @@ The result is a [`WitnessSet`](@ref) whose subspace is a [`ProductSubspace`](@re
 generic slice of the fibre on the remaining coordinates. Its [`points`](@ref) are the witness
 points of the image and its [`degree`](@ref) the degree of the image variety.
 
-It is built by monodromy: the fibre slice `L₂` is held fixed while [`monodromy_solve`](@ref)
-loops the image slice `L₁`. Because the projection need not be injective, only one
+The witness points are all isolated points of `V(F) ∩ (L₁ × L₂)`, so every irreducible
+component of the image is covered. Because the projection need not be injective, only one
 representative preimage per image point is kept, so the witness set stores — and every later
 operation on it (moving the image slice, trace tests) tracks — as few solutions as possible.
 
-* `dim_image`: the dimension `e` of the image variety `π(V(F))`.
-* `dim`: the dimension `d` of `V(F)`; estimated as `corank(F)` if omitted. The fibre slice
-  `L₂` gets codimension `d - e`.
+* `dim_image`: the dimension `e` of the image variety `π(V(F))`. If omitted it is computed
+  as the rank of the projection restricted to the tangent space of `V(F)` at a generic point
+  — of a single component, so pass it explicitly for a reducible variety whose components
+  have images of different dimensions.
+* `dim`: the dimension(s) of the components of `V(F)` to project — an integer or a vector of
+  integers, for which the slices are computed with [`solve`](@ref), or `nothing` (default):
+  the dimension-`e` part of the image may come from components of any dimension between `e`
+  and `e + #fibre coordinates`, and a single [`regeneration`](@ref) pass of `F` together with
+  the image slice covers them all at once. The fibre slice `L₂` gets codimension `d - e`.
+  One witness set per dimension with witness points is returned — a plain `WitnessSet` if
+  that is a single one, otherwise a vector.
 * `certify = true`: run the [`trace_test`](@ref) on the result and warn if it does not pass.
 
 A homogeneous `F` is handled as its affine cone: `dim` and `dim_image` are then projective
@@ -48,8 +60,8 @@ julia> degree(W)   # image is the plane ℂ², degree 1; the 2-to-1 fibre is ded
 function pseudo_witness_set(
     F::AbstractSystem,
     image_coords::AbstractVector{<:Integer};
-    dim_image::Integer,
-    dim::Union{Nothing,Integer} = nothing,
+    dim_image::Union{Nothing,Integer} = nothing,
+    dim::Union{Nothing,Integer,AbstractVector{<:Integer}} = nothing,
     certify::Bool = true,
     atol::Real = 1e-10,
     rtol::Real = 1e-8,
@@ -60,60 +72,101 @@ function pseudo_witness_set(
     all(v -> 1 ≤ v ≤ n, image_coords) ||
         throw(ArgumentError("`image_coords` must be a subset of 1:$n."))
 
-    # a homogeneous system is handled as its affine cone: the given projective dimensions are
-    # shifted by one and everything below stays affine (`corank` already returns the cone dim)
-    d = isnothing(dim) ? corank(F) : dim + projective
-    e = dim_image + projective
-    0 ≤ e ≤ d ||
-        throw(ArgumentError("`dim_image` must satisfy 0 ≤ dim_image ≤ dim (= $d)."))
-
     image_coords = collect(Int, image_coords)
     fibre_coords = setdiff(1:n, image_coords)
-
-    # fix the fibre slice L₂ (baked into F′ = X ∩ L₂), leaving only the image slice to move.
-    # With no fibre to cut (d == e) the slice is the whole fibre space (no equations).
-    # fix the fibre slice L₂ (baked into F′ = X ∩ L₂), leaving only the image slice to move.
-    # With no fibre to cut (d == e) the slice is the whole fibre space (no equations).
     m₂ = length(fibre_coords)
-    L₂ = d - e == 0 ? LinearSubspace(zeros(ComplexF64, 0, m₂)) : rand_subspace(m₂; codim = d - e)
-    F′ = d - e == 0 ? F : slice(F, _embed_subspace(L₂, fibre_coords, n))
 
-    # seed a point of X′ and an image-aligned slice through its image
-    sp = find_start_pair(F′)
-    isnothing(sp) &&
-        error("`pseudo_witness_set`: could not find a start point on the variety.")
-    x₀ = sp[1]
-    A₁ = randn(ComplexF64, e, length(image_coords))
-    L₁ = LinearSubspace(A₁, A₁ * x₀[image_coords])
+    # a homogeneous system is handled as its affine cone: the given projective dimensions
+    # are shifted by one and everything below stays affine. The dimension-e part of the
+    # image may come from components of V(F) of any dimension between e and e + m₂ (the
+    # fibre of a coordinate projection lives in the fibre coordinates), so by default a
+    # slice for every possible dimension is computed.
+    e = isnothing(dim_image) ? image_corank(F, image_coords) : dim_image + projective
 
-    # `monodromy_solve` loops the image slice — its loops translate the slice, which keeps it
-    # aligned to the image coordinates — and deduplicates by the image coordinates, so it
-    # discovers one representative preimage per image point
+    # keep one representative preimage per image point: two preimages agreeing in the image
+    # coordinates are the same image point
     image_distance = (u, v) -> LA.norm(view(u, image_coords) - view(v, image_coords))
-    mon = monodromy_solve(
-        F′,
-        [x₀],
-        _embed_subspace(L₁, image_coords, n);
-        distance = image_distance,
-        unique_points_atol = atol,
-        unique_points_rtol = rtol,
-        options...,
-    )
-    W = WitnessSet(
-        F,
-        ProductSubspace(L₁, L₂, image_coords, fibre_coords),
-        solutions(mon);
-        projective = false,
-    )
+    keep_one_per_image = sols -> begin
+        S = empty(sols)
+        if !isempty(sols)
+            seen = UniquePoints(sols[1], 1; distance = image_distance)
+            for (i, s) in enumerate(sols)
+                _, new_point = add!(seen, s, i; atol = atol, rtol = rtol)
+                new_point && push!(S, s)
+            end
+        end
+        S
+    end
 
-    if certify
-        tr = trace_test(W)
-        if isnothing(tr) || abs(tr) > 1e-6
-            @warn "pseudo_witness_set: trace test not satisfied (trace = $tr); the witness " *
-                  "set may be incomplete."
+    Ws = Vector{WitnessSet}()
+    if isnothing(dim)
+        # baking the image slice L₁ into the system, the dimension levels of
+        # Y = V(F) ∩ π⁻¹(L₁) are exactly the possible fibre dimensions, so a single
+        # `regeneration` pass covers components of V(F) of every dimension at once
+        L₁ = LinearSubspace(randn(ComplexF64, e, length(image_coords)), randn(ComplexF64, e))
+        E₁ = extrinsic(L₁)
+        vars = variables(System(F))
+        G = System([expressions(System(F)); E₁.A * vars[image_coords] - E₁.b], vars)
+        for W in regeneration(G; show_progress = false, options...)
+            c = codim(linear_subspace(W))    # the fibre dimension; source dimension e + c
+            c ≤ m₂ || continue               # larger fibres belong to higher-dimensional images
+            S = keep_one_per_image(solutions(W))
+            isempty(S) && continue
+            # move the representatives onto a fibre-aligned slice — the image slice is part
+            # of G, so the start and target slices both have codimension c
+            P₂ = rand_subspace(image_coords, fibre_coords; codim₁ = 0, codim₂ = c)
+            if c > 0
+                res = solve(
+                    G,
+                    S;
+                    start_subspace = linear_subspace(W),
+                    target_subspace = LinearSubspace(P₂),
+                )
+                S = solutions(res)
+                isempty(S) && continue
+            end
+            P = ProductSubspace(L₁, P₂.L₂, image_coords, fibre_coords)
+            push!(Ws, WitnessSet(F, P, S; projective = false))
+        end
+    else
+        # every component of V(F) has dimension ≥ n - #equations, so smaller slices are empty
+        dim_min = n - size(F, 1)
+        dims = dim .+ projective
+        all(d -> e ≤ d ≤ e + m₂, dims) || throw(
+            ArgumentError(
+                "`dim` must satisfy dim_image ≤ dim ≤ dim_image + $(m₂ - projective).",
+            ),
+        )
+        for d in dims
+            # a generic product slice: codimension e on the image coordinates, d - e on the fibre
+            P = rand_subspace(image_coords, fibre_coords; codim₁ = e, codim₂ = d - e)
+
+            # compute all isolated points of X ∩ (L₁ × L₂) on the flattened product slice —
+            # the polyhedral start system reaches every irreducible component
+            sols = if d < dim_min
+                Vector{Vector{ComplexF64}}()
+            else
+                res = solve(F; target_subspace = LinearSubspace(P), options...)
+                solutions(res; only_nonsingular = true)
+            end
+            S = keep_one_per_image(sols)
+            # dimensions without witness points are dropped (unless explicitly requested alone)
+            isempty(S) && !(dim isa Integer) && continue
+            push!(Ws, WitnessSet(F, P, S; projective = false))
         end
     end
-    W
+
+    if certify
+        for W in Ws
+            degree(W) == 0 && continue
+            tr = trace_test(W)
+            if isnothing(tr) || abs(tr) > 1e-6
+                @warn "pseudo_witness_set: trace test not satisfied (trace = $tr) for " *
+                      "dimension $(codim(W.L) - projective); the witness set may be incomplete."
+            end
+        end
+    end
+    length(Ws) == 1 ? only(Ws) : Ws
 end
 
 pseudo_witness_set(F::System, image; compile = COMPILE_DEFAULT[], kwargs...) =
