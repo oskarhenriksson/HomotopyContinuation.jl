@@ -824,6 +824,24 @@ is described by `Lᵢ = \\{ x | Aᵢ x = 0 \\}`.
 is_linear(A::ProductSubspace) = is_linear(A.L₁) && is_linear(A.L₂)
 
 """
+    rand_subspace(coords₁, coords₂; codim₁, codim₂)
+
+Return a random [`ProductSubspace`](@ref) `L₁ × L₂`, where `Lᵢ` is a generic affine subspace
+of codimension `codimᵢ` on the coordinates `coordsᵢ`. Unlike `rand_subspace(n; codim)` a
+factor may also be zero-dimensional or the whole coordinate space.
+"""
+function rand_subspace(
+    coords₁::AbstractVector{<:Integer},
+    coords₂::AbstractVector{<:Integer};
+    codim₁::Integer,
+    codim₂::Integer,
+)
+    L₁ = LinearSubspace(randn(ComplexF64, codim₁, length(coords₁)), randn(ComplexF64, codim₁))
+    L₂ = LinearSubspace(randn(ComplexF64, codim₂, length(coords₂)), randn(ComplexF64, codim₂))
+    ProductSubspace(L₁, L₂, coords₁, coords₂)
+end
+
+"""
     translate(L::ProductSubspace, δb, ::Coordinates = Extrinsic)
 
 Translate the product subspace `L = L₁ × L₂` by `δb`. Compatible with
