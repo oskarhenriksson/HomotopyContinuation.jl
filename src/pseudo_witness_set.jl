@@ -23,7 +23,7 @@ indices may be passed instead).
 
 The result is a [`WitnessSet`](@ref) whose subspace is a [`ProductSubspace`](@ref) `L₁ × L₂`:
 `L₁` is a generic slice of codimension `dim_image` on the projected coordinates and `L₂` a
-generic slice of the fibre on the remaining coordinates. Its [`points`](@ref) are the witness
+generic slice of the fiber on the remaining coordinates. Its [`points`](@ref) are the witness
 points of the image and its [`degree`](@ref) the degree of the image variety.
 
 The witness points are all isolated points of `V(F) ∩ (L₁ × L₂)`, so every irreducible
@@ -38,8 +38,8 @@ operation on it (moving the image slice, trace tests) tracks — as few solution
 * `dim`: the dimension(s) of the components of `V(F)` to project — an integer or a vector of
   integers, for which the slices are computed with [`solve`](@ref), or `nothing` (default):
   the dimension-`e` part of the image may come from components of any dimension between `e`
-  and `e + #fibre coordinates`, and a single [`regeneration`](@ref) pass of `F` together with
-  the image slice covers them all at once. The fibre slice `L₂` gets codimension `d - e`.
+  and `e + #fiber coordinates`, and a single [`regeneration`](@ref) pass of `F` together with
+  the image slice covers them all at once. The fiber slice `L₂` gets codimension `d - e`.
   One witness set per dimension with witness points is returned — a plain `WitnessSet` if
   that is a single one, otherwise a vector.
 * `certify = true`: run the [`trace_test`](@ref) on the result and warn if it does not pass.
@@ -53,7 +53,7 @@ dimensions, the stored points are cone representatives of the projective witness
 julia> @var x y z;
 julia> F = System([x^2 + y^2 + z^2 - 1]);   # the sphere, dim 2
 julia> W = pseudo_witness_set(F, [x, y]; dim_image = 2);   # project onto (x, y)
-julia> degree(W)   # image is the plane ℂ², degree 1; the 2-to-1 fibre is deduplicated
+julia> degree(W)   # image is the plane ℂ², degree 1; the 2-to-1 fiber is deduplicated
 1
 ```
 """
@@ -73,20 +73,20 @@ function pseudo_witness_set(
         throw(ArgumentError("`image_coords` must be a subset of 1:$n."))
 
     image_coords = collect(Int, image_coords)
-    fibre_coords = setdiff(1:n, image_coords)
-    m₂ = length(fibre_coords)
+    fiber_coords = setdiff(1:n, image_coords)
+    m₂ = length(fiber_coords)
 
     # a homogeneous system is handled as its affine cone: the given projective dimensions
     # are shifted by one and everything below stays affine. The dimension-e part of the
     # image may come from components of V(F) of any dimension between e and e + m₂ (the
-    # fibre of a coordinate projection lives in the fibre coordinates), so by default a
+    # fiber of a coordinate projection lives in the fiber coordinates), so by default a
     # slice for every possible dimension is computed.
     e = isnothing(dim_image) ? image_corank(F, image_coords) : dim_image + projective
 
     # keep one representative preimage per image point: two preimages agreeing in the image
     # coordinates are the same image point
     image_distance = (u, v) -> LA.norm(view(u, image_coords) - view(v, image_coords))
-    keep_one_per_image = sols -> begin
+    keep_one_per_fiber = sols -> begin
         S = empty(sols)
         if !isempty(sols)
             seen = UniquePoints(sols[1], 1; distance = image_distance)
@@ -101,20 +101,20 @@ function pseudo_witness_set(
     Ws = Vector{WitnessSet}()
     if isnothing(dim)
         # baking the image slice L₁ into the system, the dimension levels of
-        # Y = V(F) ∩ π⁻¹(L₁) are exactly the possible fibre dimensions, so a single
+        # Y = V(F) ∩ π⁻¹(L₁) are exactly the possible fiber dimensions, so a single
         # `regeneration` pass covers components of V(F) of every dimension at once
         L₁ = LinearSubspace(randn(ComplexF64, e, length(image_coords)), randn(ComplexF64, e))
         E₁ = extrinsic(L₁)
         vars = variables(System(F))
         G = System([expressions(System(F)); E₁.A * vars[image_coords] - E₁.b], vars)
         for W in regeneration(G; show_progress = false, options...)
-            c = codim(linear_subspace(W))    # the fibre dimension; source dimension e + c
-            c ≤ m₂ || continue               # larger fibres belong to higher-dimensional images
-            S = keep_one_per_image(solutions(W))
+            c = codim(linear_subspace(W))    # the fiber dimension; source dimension e + c
+            c ≤ m₂ || continue               # larger fibers belong to higher-dimensional images
+            S = keep_one_per_fiber(solutions(W))
             isempty(S) && continue
-            # move the representatives onto a fibre-aligned slice — the image slice is part
+            # move the representatives onto a fiber-aligned slice — the image slice is part
             # of G, so the start and target slices both have codimension c
-            P₂ = rand_subspace(image_coords, fibre_coords; codim₁ = 0, codim₂ = c)
+            P₂ = rand_subspace(image_coords, fiber_coords; codim₁ = 0, codim₂ = c)
             if c > 0
                 res = solve(
                     G,
@@ -125,7 +125,7 @@ function pseudo_witness_set(
                 S = solutions(res)
                 isempty(S) && continue
             end
-            P = ProductSubspace(L₁, P₂.L₂, image_coords, fibre_coords)
+            P = ProductSubspace(L₁, P₂.L₂, image_coords, fiber_coords)
             push!(Ws, WitnessSet(F, P, S; projective = false))
         end
     else
@@ -138,8 +138,8 @@ function pseudo_witness_set(
             ),
         )
         for d in dims
-            # a generic product slice: codimension e on the image coordinates, d - e on the fibre
-            P = rand_subspace(image_coords, fibre_coords; codim₁ = e, codim₂ = d - e)
+            # a generic product slice: codimension e on the image coordinates, d - e on the fiber
+            P = rand_subspace(image_coords, fiber_coords; codim₁ = e, codim₂ = d - e)
 
             # compute all isolated points of X ∩ (L₁ × L₂) on the flattened product slice —
             # the polyhedral start system reaches every irreducible component
@@ -149,7 +149,7 @@ function pseudo_witness_set(
                 res = solve(F; target_subspace = LinearSubspace(P), options...)
                 solutions(res; only_nonsingular = true)
             end
-            S = keep_one_per_image(sols)
+            S = keep_one_per_fiber(sols)
             # dimensions without witness points are dropped (unless explicitly requested alone)
             isempty(S) && !(dim isa Integer) && continue
             push!(Ws, WitnessSet(F, P, S; projective = false))

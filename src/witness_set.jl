@@ -442,7 +442,7 @@ function serial_x_in_Y(
         if Y.L isa ProductSubspace
             # pseudo-witness set: the query is an image point — slice the image through it
             # (the directions in `A` restricted to the image coordinates) and keep the
-            # fibre slice L₂ fixed
+            # fiber slice L₂ fixed
             A₁ = view(A, :, Y.L.coords₁)
             LA.mul!(b, A₁, x)
             L = LinearSubspace(
@@ -561,7 +561,7 @@ function threaded_x_in_Y(
                             if Y.L isa ProductSubspace
                                 # pseudo-witness set: the query is an image point — slice
                                 # the image through it (the directions in `A` restricted to
-                                # the image coordinates) and keep the fibre slice L₂ fixed
+                                # the image coordinates) and keep the fiber slice L₂ fixed
                                 A₁ = view(local_A, :, Y.L.coords₁)
                                 LA.mul!(local_b, A₁, x)
                                 L = LinearSubspace(
@@ -651,6 +651,7 @@ APA
 function trace_test(W₀::WitnessSet; options...)
     # in the projective setting, put the system and solutions on a common affine chart first
     W = W₀.projective ? on_affine_chart(W₀) : W₀
+    (dim(W) == 0 || length(first(points(W))) == 1) && return 0.0
     L₀ = W.L
     s₀ = sum(points(W))
 
@@ -663,19 +664,7 @@ function trace_test(W₀::WitnessSet; options...)
     s₁ = sum(points(W₁))
     s₋₁ = sum(points(W₋₁))
 
-    _trace_test_value(s₋₁, s₀, s₁)
-end
-
-# Trace value comparing the point sums `s₋₁, s₀, s₁`: complete ⟺ they are collinear, detected
-# as rank-deficiency of `[s₋₁ s₀ s₁; 1 1 1]` via its smallest singular value. That test needs
-# points of length ≥ 2; for scalar points (e.g. a witness set with a 1-dimensional image, or a
-# one-variable system) it is degenerate, so we use the equivalent symmetric second difference.
-function _trace_test_value(s₋₁, s₀, s₁)
-    if length(s₀) ≥ 2
-        M = [s₋₁ s₀ s₁; 1 1 1]
-        singvals = LA.svdvals(M)
-        singvals[3] / singvals[1]
-    else
-        LA.norm(s₋₁ - 2 .* s₀ + s₁) / (LA.norm(s₋₁) + LA.norm(s₀) + LA.norm(s₁) + eps())
-    end
+    M = [s₋₁ s₀ s₁; 1 1 1]
+    singvals = LA.svdvals(M)
+    singvals[3] / singvals[1]
 end

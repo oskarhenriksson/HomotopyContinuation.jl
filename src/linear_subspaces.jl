@@ -720,7 +720,7 @@ common ambient space: `coords₁` lists the ambient coordinates that `L₁` acts
 those that `L₂` acts on. Together `coords₁` and `coords₂` partition the ambient coordinates.
 
 For pseudo-witness sets `L₁` is the slice in the **image** (the projected/kept coordinates
-`coords₁`) and `L₂` is the slice in the **fibre** (`coords₂`). The embedding is what lets a
+`coords₁`) and `L₂` is the slice in the **fiber** (`coords₂`). The embedding is what lets a
 witness set report the projection: the image of a solution `x` is `x[coords₁]`.
 """
 struct ProductSubspace{T} <: AbstractSubspace{T}
