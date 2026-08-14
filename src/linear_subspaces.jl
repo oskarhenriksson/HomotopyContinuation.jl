@@ -1,4 +1,5 @@
 export LinearSubspace,
+    ProductSubspace,
     ExtrinsicDescription,
     IntrinsicDescription,
     Coordinates,
@@ -711,4 +712,178 @@ function Base.intersect(L₁::LinearSubspace, L₂::LinearSubspace)
     ext₁ = extrinsic(L₁)
     ext₂ = extrinsic(L₂)
     LinearSubspace([ext₁.A; ext₂.A], [ext₁.b; ext₂.b])
+end
+
+
+
+### ProductSubspaces
+
+"""
+    ProductSubspace(L₁, L₂, coords₁, coords₂)
+
+A product `L₁ × L₂` of two (affine) linear subspaces together with an *embedding* into a
+common ambient space: `coords₁` lists the ambient coordinates that `L₁` acts on and `coords₂`
+those that `L₂` acts on. Together `coords₁` and `coords₂` partition the ambient coordinates.
+
+For pseudo-witness sets `L₁` is the slice in the **image** (the projected/kept coordinates
+`coords₁`) and `L₂` is the slice in the **fiber** (`coords₂`). The embedding is what lets a
+witness set report the projection: the image of a solution `x` is `x[coords₁]`.
+"""
+struct ProductSubspace{T} <: AbstractSubspace{T}
+    L₁::LinearSubspace{T}
+    L₂::LinearSubspace{T}
+    # ambient coordinates each factor acts on (the embedding into the full space)
+    coords₁::Vector{Int}
+    coords₂::Vector{Int}
+end
+
+# default embedding: L₁ on the first block of coordinates, L₂ on the following block
+function ProductSubspace(L₁::LinearSubspace, L₂::LinearSubspace)
+    n₁ = ambient_dim(L₁)
+    n₂ = ambient_dim(L₂)
+    ProductSubspace(L₁, L₂, collect(1:n₁), collect(n₁+1:n₁+n₂))
+end
+
+# explicit embedding
+function ProductSubspace(
+    L₁::LinearSubspace,
+    L₂::LinearSubspace,
+    coords₁::AbstractVector{<:Integer},
+    coords₂::AbstractVector{<:Integer},
+)
+    length(coords₁) == ambient_dim(L₁) ||
+        throw(ArgumentError("`coords₁` must have one entry per ambient coordinate of `L₁`."))
+    length(coords₂) == ambient_dim(L₂) ||
+        throw(ArgumentError("`coords₂` must have one entry per ambient coordinate of `L₂`."))
+    ProductSubspace(L₁, L₂, collect(Int, coords₁), collect(Int, coords₂))
+end
+
+function ProductSubspace(
+    A₁::AbstractMatrix{T},
+    A₂::AbstractMatrix{T};
+    b₁::AbstractVector{T} = zeros(eltype(A₁), size(A₁, 1)),
+    b₂::AbstractVector{T} = zeros(eltype(A₂), size(A₂, 1)),
+) where {T}
+    ProductSubspace(LinearSubspace(A₁, b₁), LinearSubspace(A₂, b₂))
+end
+
+function Base.convert(::Type{ProductSubspace{T}}, A::ProductSubspace) where {T}
+    ProductSubspace(
+        convert(LinearSubspace{T}, A.L₁),
+        convert(LinearSubspace{T}, A.L₂),
+        A.coords₁,
+        A.coords₂,
+    )
+end
+
+"""
+    LinearSubspace(P::ProductSubspace)
+
+Flatten the product subspace `P = L₁ × L₂` into a single [`LinearSubspace`](@ref) of the
+full ambient space, embedding the extrinsic equations of `L₁` on the coordinates `coords₁`
+and those of `L₂` on `coords₂`. This lets a product subspace be solved / tracked with the
+ordinary linear-subspace machinery.
+"""
+function LinearSubspace(P::ProductSubspace{T}) where {T}
+    E₁ = extrinsic(P.L₁)
+    E₂ = extrinsic(P.L₂)
+    c₁ = size(E₁.A, 1)
+    c₂ = size(E₂.A, 1)
+    n = length(P.coords₁) + length(P.coords₂)
+    A = zeros(T, c₁ + c₂, n)
+    A[1:c₁, P.coords₁] .= E₁.A
+    A[c₁+1:c₁+c₂, P.coords₂] .= E₂.A
+    b = vcat(E₁.b, E₂.b)
+    LinearSubspace(A, b)
+end
+LinearSubspace(L::LinearSubspace) = L
+
+# Base.broadcastable(A::ProductSubspace) = Ref(A)
+
+"""
+    dim(A::ProductSubspace)
+
+Dimension of the product subspace `A`.
+"""
+dim(A::ProductSubspace) = dim(A.L₁) + dim(A.L₂)
+
+"""
+    codim(A::ProductSubspace)
+
+Codimension of the product subspace `A`.
+"""
+codim(A::ProductSubspace) = codim(A.L₁) + codim(A.L₂)
+
+"""
+    ambient_dim(A::ProductSubspace)
+
+Dimension of ambient space of the product subspace `A`.
+"""
+ambient_dim(A::ProductSubspace) = dim(A) + codim(A)
+
+"""
+    is_linear(L::ProductSubspace)
+
+Returns `true` if the product subspace is a proper linear subspace, i.e., each factor
+is described by `Lᵢ = \\{ x | Aᵢ x = 0 \\}`.
+"""
+is_linear(A::ProductSubspace) = is_linear(A.L₁) && is_linear(A.L₂)
+
+"""
+    rand_subspace(coords₁, coords₂; codim₁, codim₂)
+
+Return a random [`ProductSubspace`](@ref) `L₁ × L₂`, where `Lᵢ` is a generic affine subspace
+of codimension `codimᵢ` on the coordinates `coordsᵢ`. Unlike `rand_subspace(n; codim)` a
+factor may also be zero-dimensional or the whole coordinate space.
+"""
+function rand_subspace(
+    coords₁::AbstractVector{<:Integer},
+    coords₂::AbstractVector{<:Integer};
+    codim₁::Integer,
+    codim₂::Integer,
+)
+    L₁ = LinearSubspace(randn(ComplexF64, codim₁, length(coords₁)), randn(ComplexF64, codim₁))
+    L₂ = LinearSubspace(randn(ComplexF64, codim₂, length(coords₂)), randn(ComplexF64, codim₂))
+    ProductSubspace(L₁, L₂, coords₁, coords₂)
+end
+
+"""
+    translate(L::ProductSubspace, δb, ::Coordinates = Extrinsic)
+
+Translate the product subspace `L = L₁ × L₂` by `δb`. Compatible with
+[`translate`](@ref)`(::LinearSubspace, …)`: `δb` has length `codim(L)`, its first
+`codim(L₁)` entries translating `L₁` and the remaining `codim(L₂)` translating `L₂`.
+"""
+function translate(L::ProductSubspace, δb, coords::Coordinates{:Extrinsic} = Extrinsic)
+    c₁ = codim(L.L₁)
+    ProductSubspace(
+        translate(L.L₁, δb[1:c₁], coords),
+        translate(L.L₂, δb[c₁+1:end], coords),
+        L.coords₁,
+        L.coords₂,
+    )
+end
+
+function Base.show(io::IO, A::ProductSubspace{T}) where {T}
+    println(io, "Product of two linear subspaces on coordinates $(A.coords₁) × $(A.coords₂):")
+    show(io, A.L₁)
+    println(io)
+    show(io, A.L₂)
+end
+
+function Base.copy!(A::ProductSubspace, B::ProductSubspace)
+    copy!(A.L₁, B.L₁)
+    copy!(A.L₂, B.L₂)
+    A
+end
+Base.copy(A::ProductSubspace) =
+    ProductSubspace(copy(A.L₁), copy(A.L₂), copy(A.coords₁), copy(A.coords₂))
+
+function Base.:(==)(A::ProductSubspace, B::ProductSubspace)
+    A.L₁ == B.L₁ && A.L₂ == B.L₂ && A.coords₁ == B.coords₁ && A.coords₂ == B.coords₂
+end
+Base.isequal(A::ProductSubspace, B::ProductSubspace) = A === B
+
+function Base.:(*)(A::LinearSubspace, B::LinearSubspace)
+    ProductSubspace(A,B)
 end

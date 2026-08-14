@@ -1,10 +1,15 @@
 export WitnessSet,
-    witness_set, linear_subspace, system, dim, codim, trace_test, is_irreducible, membership
+    witness_set, linear_subspace, system, dim, codim, points, trace_test, is_irreducible, membership
 
 """
     WitnessSet(F, L, S)
 
 Store solutions `S` of the polynomial system `F(x) = L(x) = 0` into a witness set.
+
+The subspace `L` may be an ordinary [`LinearSubspace`](@ref) — an ordinary witness set — or a
+[`ProductSubspace`](@ref), in which case `W` is a *pseudo-witness set* for the image of the
+variety under the coordinate projection encoded by the product subspace's embedding. See
+[`pseudo_witness_set`](@ref).
 """
 struct WitnessSet{
     S<:AbstractSystem,
@@ -20,9 +25,10 @@ struct WitnessSet{
     is_irreducible::Union{Nothing,Bool}
 end
 
+
 function WitnessSet(
     F::AbstractSystem,
-    L::LinearSubspace,
+    L::AbstractSubspace,
     R;
     projective::Bool = is_linear(L) && is_homogeneous(System(F)),
     is_irreducible::Union{Nothing,Bool} = nothing,
@@ -42,17 +48,24 @@ system(W::WitnessSet) = W.F
 
 Get the linear subspace stored in `W`.
 """
-linear_subspace(W::WitnessSet) = W.L
+linear_subspace(W::WitnessSet{A, <:LinearSubspace, B}) where {A,B} = W.L
+linear_subspace(W::WitnessSet{A, <:ProductSubspace, B}) where {A,B} = W.L.L₁
 
 """
     solutions(W::WitnessSet)
 
 Get the solutions stored in `W`.
 """
-solutions(W::WitnessSet{A,B,PathResult}) where {A,B} = solutions(W.R)
-solutions(W::WitnessSet{A,B,Vector{ComplexF64}}) where {A,B} = W.R
+solutions(W::WitnessSet) = _witness_solutions(W.R)
+_witness_solutions(R::Vector{<:PathResult}) = solutions(R)
+_witness_solutions(R::Vector{Vector{ComplexF64}}) = R
 
-points(W::WitnessSet) = solutions(W)
+# The witness points of an ordinary witness set are the stored solutions.
+points(W::WitnessSet{<:Any,<:LinearSubspace,<:Any}) = solutions(W)
+# For a product subspace `W` is a pseudo-witness set: the witness points are the images of
+# the stored preimages under the projection, i.e. their `coords₁` (image) coordinates.
+points(W::WitnessSet{<:Any,<:ProductSubspace,<:Any}) =
+    map(s -> s[W.L.coords₁], solutions(W))
 
 """
     results(W::WitnessSet)
@@ -66,21 +79,21 @@ results(W::WitnessSet{<:Any,<:Any,PathResult}) = W.R
 
 Returns the degree of the witness set `W`. This equals the number of solutions stored.
 """
-ModelKit.degree(W::WitnessSet) = length(W.R)
+ModelKit.degree(W::WitnessSet) = length(points(W))
 
 """
     dim(W::WitnessSet)
 
 The dimension of the algebraic set encoded by the witness set.
 """
-dim(W::WitnessSet) = codim(W.L)
+dim(W::WitnessSet) = codim(linear_subspace(W))
 
 """
     codim(W::WitnessSet)
 
 The dimension of the algebraic set encoded by the witness set.
 """
-codim(W::WitnessSet) = dim(W.L)
+codim(W::WitnessSet) = dim(linear_subspace(W))
 
 function Base.show(io::IO, W::WitnessSet)
     print(io, "Witness set for dimension $(dim(W)) of degree $(degree(W))")
@@ -217,14 +230,15 @@ end
 
 
 ### Move witness sets around
-function witness_set(W::WitnessSet, L::LinearSubspace; options...)
+# `L` may be a `LinearSubspace` or a `ProductSubspace`; the slices are flattened for tracking.
+function witness_set(W::WitnessSet, L::Union{LinearSubspace,ProductSubspace}; options...)
     if W.projective && !is_linear(L)
         error(
             "The given space is an affine linear subspace (``b ≠ 0``). " *
             " Expected a linear subspace since the given witness set is projective.",
         )
     end
-    res = solve(W.F, W.R; start_subspace = W.L, target_subspace = L, options...)
+    res = solve(W.F, W.R; start_subspace = LinearSubspace(W.L), target_subspace = LinearSubspace(L), options...)
     WitnessSet(
         W.F,
         L,
@@ -232,6 +246,21 @@ function witness_set(W::WitnessSet, L::LinearSubspace; options...)
         projective = is_linear(L) && W.projective,
     )
 end
+
+function on_affine_chart(W::WitnessSet)
+    if !W.projective
+        error("Witness set is not projective.")
+    end
+    F = on_affine_chart(W.F)
+    WitnessSet(
+        F,
+        W.L,
+        map(s -> set_solution!(s, F, s), solutions(W))
+    )
+end
+
+
+        
 
 ### Membership
 Base.@kwdef mutable struct MembershipProgress
@@ -272,7 +301,7 @@ function MembershipCache(W, EO, TO, progress)
     F = system(W)
     m, n = size(F)
     i = codim(W)
-    A0 = zeros(ComplexF64, n - i, n)
+    A0 = randn(ComplexF64, n - i, n)
     A = LA.svd(A0).Vt # need to orthonormalize A
     b = zeros(ComplexF64, n - i)
     x0 = zeros(ComplexF64, n)
@@ -352,7 +381,8 @@ function is_contained(
     tracker_options = cache.tracker_options
     endgame_options = cache.endgame_options
     projective = Y.projective
-    LY = linear_subspace(Y)
+    # `Y.L` may be a `LinearSubspace` (identity) or a `ProductSubspace` (flattened for tracking)
+    LY = LinearSubspace(Y.L)
     Hom = linear_subspace_homotopy(F, LY, LY)
     tracker =
         EndgameTracker(Hom; tracker_options = tracker_options, options = endgame_options)
@@ -387,6 +417,8 @@ function serial_x_in_Y(
     cY = codim(linear_subspace(Y))
     A = view(cache.A, 1:cY, :)
     b = view(cache.b, 1:cY)
+    # for a pseudo-witness set only the image coordinates are compared with the query
+    cols = Y.L isa ProductSubspace ? Y.L.coords₁ : Colon()
 
     # Pre-allocate output
     out = Vector{Bool}(undef, l_X)
@@ -396,15 +428,32 @@ function serial_x_in_Y(
         idx += 1
         update_progress_tasks!(progress, idx, l_X)
 
-        # first check
-        evaluate!(y0, F, norm(x, Inf) .* x0)
-        evaluate!(y, F, x)
-        if norm(y, Inf) > 1e-2 * norm(y0, Inf)
-            return false
+        # first check: a cheap rejection, only possible when the query is a full-space point
+        # (for a pseudo-witness set the query is an image point, so `F` cannot be evaluated)
+        if !(Y.L isa ProductSubspace)
+            evaluate!(y0, F, norm(x, Inf) .* x0)
+            evaluate!(y, F, x)
+            if norm(y, Inf) > 1e-2 * norm(y0, Inf)
+                return false
+            end
         end
 
         # second check
-        if projective isa Val{true}
+        if Y.L isa ProductSubspace
+            # pseudo-witness set: the query is an image point — slice the image through it
+            # (the directions in `A` restricted to the image coordinates) and keep the
+            # fiber slice L₂ fixed
+            A₁ = view(A, :, Y.L.coords₁)
+            LA.mul!(b, A₁, x)
+            L = LinearSubspace(
+                ProductSubspace(
+                    LinearSubspace(Matrix(A₁), Vector(b)),
+                    Y.L.L₂,
+                    Y.L.coords₁,
+                    Y.L.coords₂,
+                ),
+            )
+        elseif projective isa Val{true}
             L = rand_subspace!(A, b, x; affine = false)
         else
             LA.mul!(b, A, x)
@@ -422,11 +471,11 @@ function serial_x_in_Y(
 
         rad = max(atol, norm(x_target, Inf) * rtol)
 
-        # add the points in Y to U after we have moved them towards L 
-        for p in points(Y)
+        # add the points in Y to U after we have moved them towards L
+        for p in solutions(Y)
             track!(tracker, p, 1)
             q = solution(tracker)
-            d = distance(q, x_target, InfNorm())
+            d = distance(view(q, cols), x_target, InfNorm())
             if d < rad
                 return true
             end
@@ -458,6 +507,8 @@ function threaded_x_in_Y(
     cY = codim(linear_subspace(Y))
     A = view(cache.A, 1:cY, :)
     b = view(cache.b, 1:cY)
+    # for a pseudo-witness set only the image coordinates are compared with the query
+    cols = Y.L isa ProductSubspace ? Y.L.coords₁ : Colon()
 
     # Pre-allocate output
     out = Vector{Bool}(undef, l_X)
@@ -496,20 +547,38 @@ function threaded_x_in_Y(
                             update_progress_tasks!(progress, idx, l_X)
                         end
 
-                        # first check
-                        evaluate!(local_y0, local_F, norm(x, Inf) .* x0)
-                        evaluate!(local_y, local_F, x)
+                        # first check (skipped for a pseudo-witness set: the query is an
+                        # image point, so `F` cannot be evaluated at it)
+                        if !(Y.L isa ProductSubspace)
+                            evaluate!(local_y0, local_F, norm(x, Inf) .* x0)
+                            evaluate!(local_y, local_F, x)
+                        end
 
                         result = false
-                        if norm(local_y, Inf) <= 1e-2 * norm(local_y0, Inf)
+                        if Y.L isa ProductSubspace ||
+                           norm(local_y, Inf) <= 1e-2 * norm(local_y0, Inf)
                             # second check
-                            if projective isa Val{true}
+                            if Y.L isa ProductSubspace
+                                # pseudo-witness set: the query is an image point — slice
+                                # the image through it (the directions in `A` restricted to
+                                # the image coordinates) and keep the fiber slice L₂ fixed
+                                A₁ = view(local_A, :, Y.L.coords₁)
+                                LA.mul!(local_b, A₁, x)
+                                L = LinearSubspace(
+                                    ProductSubspace(
+                                        LinearSubspace(Matrix(A₁), Vector(local_b)),
+                                        Y.L.L₂,
+                                        Y.L.coords₁,
+                                        Y.L.coords₂,
+                                    ),
+                                )
+                            elseif projective isa Val{true}
                                 L = rand_subspace!(local_A, local_b, x; affine = false)
                             else
-                                LA.mul!(local_b, A, x)
+                                LA.mul!(local_b, local_A, x)
                                 L = LinearSubspace(
                                     ExtrinsicDescription(
-                                        copy(A),
+                                        copy(local_A),
                                         copy(local_b);
                                         orthonormal = true,
                                     ),
@@ -527,11 +596,11 @@ function threaded_x_in_Y(
 
                             rad = max(atol, norm(x_target, Inf) * rtol)
 
-                            # add the points in Y to U after we have moved them towards L 
-                            for p in points(Y)
+                            # add the points in Y to U after we have moved them towards L
+                            for p in solutions(Y)
                                 track!(local_tracker, p, 1)
                                 q = solution(local_tracker)
-                                if distance(q, x_target, InfNorm()) < rad
+                                if distance(view(q, cols), x_target, InfNorm()) < rad
                                     result = true
                                     break
                                 end
@@ -580,35 +649,22 @@ APA
 
 """
 function trace_test(W₀::WitnessSet; options...)
-    L₀ = linear_subspace(W₀)
-    F = system(W₀)
-    S₀ = solutions(W₀)
-    # if we are in the projective setting, we need to make sure that
-    # all solutions are on the same affine chart
-    # Therefore make the affine chart now
-    if W₀.projective
-        F = on_affine_chart(F)
-        s₀ = sum(s -> set_solution!(s, F, s), S₀)
-    else
-        s₀ = sum(S₀)
-    end
+    # in the projective setting, put the system and solutions on a common affine chart first
+    W = W₀.projective ? on_affine_chart(W₀) : W₀
+    (dim(W) == 0 || length(first(points(W))) == 1) && return 0.0
+    L₀ = W.L
+    s₀ = sum(points(W))
 
     v = randn(ComplexF64, codim(L₀))
-    L₁ = translate(L₀, v)
-    L₋₁ = translate(L₀, -v)
+    W₁ = witness_set(W, translate(L₀, v); options...)
+    degree(W₁) == degree(W) || return nothing
+    W₋₁ = witness_set(W, translate(L₀, -v); options...)
+    degree(W₋₁) == degree(W) || return nothing
 
-    R₁ = solve(F, S₀; start_subspace = L₀, target_subspace = L₁, options...)
-    nsolutions(R₁) == degree(W₀) || return nothing
-
-    R₋₁ = solve(F, S₀; start_subspace = L₀, target_subspace = L₋₁, options...)
-    nsolutions(R₋₁) == degree(W₀) || return nothing
-
-    s₁ = sum(solutions(R₁))
-    s₋₁ = sum(solutions(R₋₁))
+    s₁ = sum(points(W₁))
+    s₋₁ = sum(points(W₋₁))
 
     M = [s₋₁ s₀ s₁; 1 1 1]
     singvals = LA.svdvals(M)
-    trace = singvals[3] / singvals[1]
-
-    trace
+    singvals[3] / singvals[1]
 end
